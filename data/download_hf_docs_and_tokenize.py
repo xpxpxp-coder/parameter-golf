@@ -256,20 +256,28 @@ def build_sentencepiece_tokenizer(*, spec: dict[str, Any], docs_jsonl: Path, tok
     model_path = prefix.with_suffix(".model")
     vocab_path = prefix.with_suffix(".vocab")
     prefix.parent.mkdir(parents=True, exist_ok=True)
-    for artifact in (model_path, vocab_path):
-        if artifact.exists():
-            artifact.unlink()
-
     reuse_model_path = spec.get("reuse_model_path")
     if reuse_model_path is not None:
         reuse_model_path = Path(reuse_model_path).expanduser().resolve()
         if not reuse_model_path.is_file():
             raise FileNotFoundError(reuse_model_path)
-        shutil.copy2(reuse_model_path, model_path)
+        # A repeat export may reuse the tokenizer already in this output directory.
+        # Resolve and validate the source before changing either existing artifact,
+        # and recognize symlink/hardlink aliases as the same file too.
+        same_model = model_path.exists() and reuse_model_path.samefile(model_path)
+        if not same_model:
+            shutil.copy2(reuse_model_path, model_path)
         reuse_vocab_path = reuse_model_path.with_suffix(".vocab")
         if reuse_vocab_path.is_file():
-            shutil.copy2(reuse_vocab_path, vocab_path)
+            if not (vocab_path.exists() and reuse_vocab_path.samefile(vocab_path)):
+                shutil.copy2(reuse_vocab_path, vocab_path)
+        elif not same_model and vocab_path.exists():
+            # Do not leave the previous tokenizer's vocabulary beside a new model.
+            vocab_path.unlink()
     else:
+        for artifact in (model_path, vocab_path):
+            if artifact.exists():
+                artifact.unlink()
         kwargs = {
             "sentence_iterator": _iter_sentencepiece_text(
                 docs_jsonl,
